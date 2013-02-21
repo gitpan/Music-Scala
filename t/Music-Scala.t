@@ -14,8 +14,8 @@ BEGIN { use_ok('Music::Scala') }
 my $scala = Music::Scala->new;
 isa_ok( $scala, 'Music::Scala' );
 
-dies_ok( sub { $scala->get_description },
-  'get_description before read_scala' );
+is( $scala->get_concertpitch, 440, 'default concert pitch' );
+is( $scala->get_description,  '',  'default description' );
 dies_ok( sub { $scala->get_notes }, 'get_notes before read_scala' );
 
 dies_ok( sub { $scala->read_scala( file => 'Makefile.PL' ) },
@@ -36,10 +36,20 @@ is(
   'Latin 1 infested'
 );
 $deeply->(
-  $scala->get_notes,
+  [ $scala->get_notes ],
   [ qw{256/243 189.25008 32/27 386.60605 4/3 1024/729 693.17509 128/81 887.27506 16/9 1086.80812 2/1}
   ],
   'Bach temperament'
+);
+
+$deeply->(
+  [ map { my $s = sprintf "%.2f", $_; $s }
+      $scala->interval2freq( 0, 12, 24, -12, -24, 1, 2, 3 )
+  ],
+  [ map { my $s = sprintf "%.2f", $_; $s } 440,
+    880, 1760, 220, 110, 463.54, 490.83, 521.48
+  ],
+  'frequency conversion'
 );
 
 # These were copied & pasted from scala site, plus blank desc and number
@@ -47,7 +57,7 @@ $deeply->(
 $scala->read_scala( file => 'valid-pitch-lines.scl' );
 is( $scala->get_description, '', 'blank desc' );
 $deeply->(
-  $scala->get_notes,
+  [ $scala->get_notes ],
   [qw{81/64 408.0 408. 5/1 -5.0 10/20 100.0 100.0 5/4}],
   'valid pitch lines'
 );
@@ -64,5 +74,39 @@ is(
   "J\x{fc}rgen Gr\x{f6}newald, simplified Bach temperament, Ars Organi vol.57 no.1, March 2009, p.39\r",
   'Latin 1 infested II'
 );
+# but crlf handling should not affect the note parsing...
+$deeply->(
+  [ $scala->get_notes ],
+  [ qw{256/243 189.25008 32/27 386.60605 4/3 1024/729 693.17509 128/81 887.27506 16/9 1086.80812 2/1}
+  ],
+  'Bach temperament'
+);
 
-plan tests => 12;
+isa_ok( $scala->set_description('test'), 'Music::Scala' );
+isa_ok( $scala->set_notes( [qw{256/243 9/8}] ), 'Music::Scala' );
+
+my $output = '';
+open my $ofh, '>', \$output or die 'could not open in-memory fh ' . $!;
+isa_ok( $scala->write_scala( fh => $ofh ), 'Music::Scala' );
+close $ofh;
+is( $output, "test\n 2\n!\n 256/243\n 9/8\n", 'output to fh' );
+
+isa_ok( $scala->set_concertpitch(123.4), 'Music::Scala' );
+is( $scala->get_concertpitch, 123.4, 'custom concert pitch' );
+
+# more cents testing - via slendro_ky2.scl
+$scala = Music::Scala->new( concertpitch => 295 );
+is( $scala->get_concertpitch, 295, 'check cp via new' );
+
+# NOTE Perl will map things like a bare 1200.000 to '1200' which then
+# becomes the ratio 1200/1 which is wrong.
+$scala->set_notes( 250.868, 483.311, 715.595, 951.130, '1200.000' );
+$deeply->(
+  [ map { my $s = sprintf "%.2f", $_; $s }
+      $scala->interval2freq( 0, 5, 10, -5, -10 )
+  ],
+  [ map { my $s = sprintf "%.2f", $_; $s } 295, 590, 1180, 147.5, 73.75 ],
+  'frequency conversion'
+);
+
+plan tests => 23;
