@@ -12,7 +12,7 @@ use warnings;
 use Carp qw/croak/;
 use Scalar::Util qw/looks_like_number reftype/;
 
-our $VERSION = '0.31';
+our $VERSION = '0.40';
 
 # To avoid file reader from wasting too much time on bum input (longest
 # scala file 'fortune.scl' in archive as of 2013-02-19 has 617 lines).
@@ -21,6 +21,11 @@ my $MAX_LINES = 3000;
 ########################################################################
 #
 # SUBROUTINES
+
+sub get_binmode {
+  my ($self) = @_;
+  return $self->{_binmode};
+}
 
 sub get_concertpitch {
   my ($self) = @_;
@@ -41,23 +46,21 @@ sub get_notes {
   return @{ $self->{_notes} };
 }
 
+sub get_ratios {
+  my ($self) = @_;
+  croak 'no scala loaded' if !exists $self->{_notes};
+  if ( !defined $self->{_ratios} ) {
+    $self->{_ratios} = [ $self->notes2ratios( $self->{_notes} ) ];
+  }
+  return @{ $self->{_ratios} };
+}
+
 sub interval2freq {
   my $self = shift;
   croak 'no scala loaded' if !exists $self->{_notes};
 
   if ( !defined $self->{_ratios} ) {
-    my @ratios;
-    for my $n ( @{ $self->{_notes} } ) {
-      if ( $n =~ m{(\d+)/(\d+)} ) {
-        push @ratios, $1 / $2;    # ratio, as marked with /
-      } else {
-        # Inverse cent (cent to ratio) equation. Lifted from
-        # "Musimathics, volume 1", p.46. Magic number is
-        # (1200/log10(2))
-        push @ratios, 10**( $n / 3986.31371386484 );
-      }
-    }
-    $self->{_ratios} = \@ratios;
+    $self->{_ratios} = [ $self->notes2ratios( $self->{_notes} ) ];
   }
 
   my @freqs;
@@ -71,7 +74,8 @@ sub interval2freq {
       # passes through the complete scale
       my $octave_count  = abs int $i / @{ $self->{_ratios} };
       my $octave_offset = $self->{_ratios}->[-1] * $octave_count;
-      $octave_offset = 1 / $octave_offset if $is_dsc and $octave_offset != 0;
+      $octave_offset = 1 / $octave_offset
+        if $is_dsc and $octave_offset != 0;
 
       my $remainder = 0;
       my $offset    = $i % @{ $self->{_ratios} };
@@ -111,7 +115,32 @@ sub new {
   $self->{_ratios} = undef;
 
   bless $self, $class;
+
+  if ( exists $param{file} ) {
+    $self->read_scala( file => $param{file} );
+  } elsif ( exists $param{fh} ) {
+    $self->read_scala( fh => $param{fh} );
+  }
+
   return $self;
+}
+
+sub notes2ratios {
+  my $self = shift;
+
+  my @ratios;
+  for my $n ( ref $_[0] eq 'ARRAY' ? @{ $_[0] } : @_ ) {
+    if ( $n =~ m{(\d+)/(\d+)} ) {
+      push @ratios, $1 / $2;    # ratio, as marked with /
+    } else {
+      # Inverse cent (cent to ratio) equation. Lifted from
+      # "Musimathics, volume 1", p.46. Magic number is
+      # (1200/log10(2))
+      push @ratios, 10**( $n / 3986.31371386484 );
+    }
+  }
+
+  return @ratios > 1 ? @ratios : $ratios[0];
 }
 
 sub read_scala {
@@ -207,6 +236,12 @@ sub read_scala {
   $self->{_notes}  = \@notes;
   $self->{_ratios} = undef;
 
+  return $self;
+}
+
+sub set_binmode {
+  my ( $self, $binmode ) = @_;
+  $self->{_binmode} = $binmode;
   return $self;
 }
 
@@ -325,6 +360,10 @@ to bad input. B<new> would be a good one to start with.
 
 =over 4
 
+=item B<get_binmode>
+
+Returns the current C<binmode> layer setting, C<undef> by default.
+
 =item B<get_concertpitch>
 
 Returns the concert pitch presently set in the object. 440 (Hz) is
@@ -351,6 +390,12 @@ The implicit C<1/1> for unison is not contained in the list of notes;
 the first element is for the 2nd degree of the scale (e.g. the minor
 second of a 12-tone scale).
 
+=item B<get_ratios>
+
+Returns, as a list, the "notes" of the scala, except all converted to
+ratios (notes may either be interval numbers or values in cents). Throws
+an exception if the notes have not been set by some previous method.
+
 =item B<interval2freq> I<intervals ...>
 
 Converts a list of passed interval numbers (list or single array
@@ -371,6 +416,16 @@ conversion around the frequency of MIDI pitch 60:
 Some scala files note what this value should be in the comments or
 description, or it may vary based on the specific software or
 instruments involved.
+
+The output frequencies may need to be rounded because of floating
+point math:
+
+  # octave, plus default concert pitch of 440, so expect 880
+  my $scala = Music::Scala->new->set_notes('1200.000');
+
+  $scala->interval2freq(1);   # 879.999999999999
+
+  sprintf "%.2f", $scala->interval2freq(1); # 880.00
 
 =item B<new> I<optional_params>, ...
 
@@ -401,10 +456,24 @@ using the B<interval2freq> method. By default this is 440Hz.
 
 =item *
 
+I<file> - filename, if specified, that will be passed to B<read_scala>.
+
+=item *
+
+I<fh> - file handle, if specified, that will be passed to B<read_scala>,
+but only if I<file> is not specified.
+
+=item *
+
 I<MAX_LINES> - sets the maximum number of lines to read while parsing
 data. Sanity check high water mark in the event bad input is passed.
 
 =back
+
+=item B<notes2ratios> I<notes ...>
+
+Given a list of notes, returns a list of corresponding ratios. Used
+internally by the B<get_ratios> and B<interval2freq> methods.
 
 =item B<read_scala> I<filename>
 
@@ -423,6 +492,13 @@ I<binmode> as in the B<new> method:
   $scala->read_scala( fh   => $input_fh );
 
 Returns the Music::Scala object, so can be chained with other calls.
+
+=item B<set_binmode> I<binmode_layer>
+
+Sets the default C<binmode> layer used in B<read_scala> and
+B<write_scala> methods (unless a custom I<binmode> argument is passed to
+those calls). Returns the Music::Scala object, so can be chained with
+other calls.
 
 =item B<set_concertpitch> I<frequency>
 
@@ -486,6 +562,17 @@ the C<scales.zip> as of 2013-02-20).
   for my $file ( glob('*.scl') ) {
     eval { say $file if $s->read_scala($file)->get_notes == 12 };
     warn "could not parse '$file': $@" if $@;
+  }
+
+Another interesting question is which scales contain the octave (and
+whether that octave is also the ultimate element of the note list). This
+requires converting the "notes" into actual ratios, as otherwise an
+octave might be represented as C<2/1> or C<1200.0> or C<4/2> or so
+forth. Roughly 87% of the scales are bounded at the octave:
+
+  for my $file ( glob('*.scl') ) {
+    my @ratios = $s->read_scala($file)->get_ratios;
+    if ( $ratios[-1] == 2 ) { say $file }
   }
 
 =head1 SEE ALSO
