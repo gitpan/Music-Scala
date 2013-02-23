@@ -14,9 +14,13 @@ BEGIN { use_ok('Music::Scala') }
 my $scala = Music::Scala->new;
 isa_ok( $scala, 'Music::Scala' );
 
-is( $scala->get_concertpitch, 440, 'default concert pitch' );
-is( $scala->get_description,  '',  'default description' );
+is( $scala->get_concertfreq, 440, 'default concert frequency' );
+is( $scala->get_description, '',  'default description' );
 dies_ok( sub { $scala->get_notes }, 'get_notes before read_scala' );
+
+# for MIDI/equal temperament reference operations
+is( $scala->freq2pitch(440), 69,  'frequency to pitch, MIDI ref freq' );
+is( $scala->pitch2freq(69),  440, 'pitch to frequency, MIDI ref pitch' );
 
 dies_ok( sub { $scala->read_scala( file => 'Makefile.PL' ) },
   'invalid scala file' );
@@ -91,12 +95,12 @@ isa_ok( $scala->write_scala( fh => $ofh ), 'Music::Scala' );
 close $ofh;
 is( $output, "test\n 2\n!\n 256/243\n 9/8\n", 'output to fh' );
 
-isa_ok( $scala->set_concertpitch(123.4), 'Music::Scala' );
-is( $scala->get_concertpitch, 123.4, 'custom concert pitch' );
+isa_ok( $scala->set_concertfreq(123.4), 'Music::Scala' );
+is( $scala->get_concertfreq, 123.4, 'custom concert frequency' );
 
 # more cents testing - via slendro_ky2.scl
-$scala = Music::Scala->new( concertpitch => 295 );
-is( $scala->get_concertpitch, 295, 'check cp via new' );
+$scala = Music::Scala->new( concertfreq => 295 );
+is( $scala->get_concertfreq, 295, 'check cf via new' );
 
 # NOTE Perl will map things like a bare 1200.000 to '1200' which then
 # becomes the ratio 1200/1 which is wrong.
@@ -127,4 +131,4 @@ $deeply->(
 # and saved in object when necessary
 $deeply->( [ $scala->get_ratios ], [ 2, 2, 5 / 4 ], 'notes2ratios' );
 
-plan tests => 29;
+plan tests => 31;

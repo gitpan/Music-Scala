@@ -12,7 +12,7 @@ use warnings;
 use Carp qw/croak/;
 use Scalar::Util qw/looks_like_number reftype/;
 
-our $VERSION = '0.40';
+our $VERSION = '0.50';
 
 # To avoid file reader from wasting too much time on bum input (longest
 # scala file 'fortune.scl' in archive as of 2013-02-19 has 617 lines).
@@ -22,14 +22,31 @@ my $MAX_LINES = 3000;
 #
 # SUBROUTINES
 
+# MIDI calculation, for easy comparison to scala results
+sub freq2pitch {
+  my ( $self, $freq ) = @_;
+  croak "frequency must be a positive number"
+    if !looks_like_number $freq
+    or $freq < 0;
+
+  return sprintf "%.0f",
+    $self->{_concertpitch} +
+    12 * ( log( $freq / $self->{_concertfreq} ) / log(2) );
+}
+
 sub get_binmode {
   my ($self) = @_;
   return $self->{_binmode};
 }
 
+sub get_concertfreq {
+  my ($self) = @_;
+  return $self->{_concertfreq} // 69;
+}
+
 sub get_concertpitch {
   my ($self) = @_;
-  return $self->{_concertpitch} // 440;
+  return $self->{_concertpitch} // 69;
 }
 
 sub get_description {
@@ -66,7 +83,7 @@ sub interval2freq {
   my @freqs;
   for my $i ( ref $_[0] eq 'ARRAY' ? @{ $_[0] } : @_ ) {
     if ( $i == 0 ) {    # special case for unison (ratio 1/1)
-      push @freqs, $self->{_concertpitch};
+      push @freqs, $self->{_concertfreq};
     } else {
       my $is_dsc = $i < 0 ? 1 : 0;
 
@@ -86,8 +103,8 @@ sub interval2freq {
         $remainder = 1 / $remainder if $is_dsc and $remainder != 0;
       }
 
-      push @freqs, $octave_offset * $self->{_concertpitch} +
-        $remainder * $self->{_concertpitch};
+      push @freqs, $octave_offset * $self->{_concertfreq} +
+        $remainder * $self->{_concertfreq};
     }
   }
 
@@ -100,13 +117,22 @@ sub new {
 
   $self->{_binmode} = $param{binmode} if exists $param{binmode};
 
-  $self->{_concertpitch} = 440;
+  $self->{_concertpitch} = 69;
   if ( exists $param{concertpitch} ) {
-    croak 'concert pitch must be a positive number (Hz)'
+    croak 'concert pitch must be a positive number'
       if !defined $param{concertpitch}
       or !looks_like_number $param{concertpitch}
-      or $param{concertpitch} < 0;
+      or $param{concertpitch} <= 0;
     $self->{_concertpitch} = $param{concertpitch};
+  }
+
+  $self->{_concertfreq} = 440;
+  if ( exists $param{concertfreq} ) {
+    croak 'concert frequency must be a positive number (Hz)'
+      if !defined $param{concertfreq}
+      or !looks_like_number $param{concertfreq}
+      or $param{concertfreq} <= 0;
+    $self->{_concertfreq} = $param{concertfreq};
   }
 
   $self->{_MAX_LINES} =
@@ -141,6 +167,17 @@ sub notes2ratios {
   }
 
   return @ratios > 1 ? @ratios : $ratios[0];
+}
+
+# MIDI for comparison, the other way
+sub pitch2freq {
+  my ( $self, $pitch ) = @_;
+  croak "pitch must be MIDI number"
+    if !looks_like_number $pitch
+    or $pitch < 0;
+
+  return $self->{_concertfreq} *
+    ( 2**( ( $pitch - $self->{_concertpitch} ) / 12 ) );
 }
 
 sub read_scala {
@@ -245,12 +282,22 @@ sub set_binmode {
   return $self;
 }
 
+sub set_concertfreq {
+  my ( $self, $cf ) = @_;
+  croak 'concert pitch must be a positive number (Hz)'
+    if !defined $cf
+    or !looks_like_number $cf
+    or $cf <= 0;
+  $self->{_concertfreq} = $cf;
+  return $self;
+}
+
 sub set_concertpitch {
   my ( $self, $cp ) = @_;
-  croak 'concert pitch must be a positive number (Hz)'
+  croak 'concert pitch must be a positive number'
     if !defined $cp
     or !looks_like_number $cp
-    or $cp < 0;
+    or $cp <= 0;
   $self->{_concertpitch} = $cp;
   return $self;
 }
@@ -335,8 +382,9 @@ Music::Scala - Scala scale support for Perl
   $scala->read_scala('groenewald_bach.scl');
   $scala->get_description; # "Jurgen Gronewald, si..."
   $scala->get_notes;       # (256/243, 189.25008, ...)
+  $scala->get_ratios;
 
-  $scala->set_concertpitch(422.5);
+  $scala->set_concertfreq(422.5);
   $scala->interval2freq(0, 1); # (422.5, 445.1)
 
   $scala->set_description('Heavenly Chimes');
@@ -345,6 +393,10 @@ Music::Scala - Scala scale support for Perl
 
   # or cents, note the quoting on .0 value
   $scala->set_notes(250.9, 483.3, 715.6, 951.1, '1200.0');
+
+  # MIDI equal temperament algos for comparison
+  $scala->pitch2freq(69);
+  $scala->freq2pitch(440);
 
 =head1 DESCRIPTION
 
@@ -360,14 +412,26 @@ to bad input. B<new> would be a good one to start with.
 
 =over 4
 
+=item B<freq2pitch> I<frequency>
+
+Converts the passed frequency (Hz) to the corresponding MIDI pitch
+number using the MIDI algorithm (equal temperament), as influenced by
+the I<concertfreq> setting. Unrelated to scala, but perhaps handy for
+comparison with results from B<interval2freq>.
+
 =item B<get_binmode>
 
 Returns the current C<binmode> layer setting, C<undef> by default.
 
+=item B<get_concertfreq>
+
+Returns the concert frequency presently set in the object. 440 (Hz) is
+the default.
+
 =item B<get_concertpitch>
 
-Returns the concert pitch presently set in the object. 440 (Hz) is
-the default.
+Returns the MIDI pitch number that the I<concertfreq> maps to. 69 by
+default (as that is the MIDI number of A440).
 
 =item B<get_description>
 
@@ -407,11 +471,11 @@ equivalent thereof, depending on the scale. Negative intervals take the
 frequency in the other direction, e.g. C<-1> for what in a 12-note
 system would be a minor 2nd downwards.
 
-Conversions are based on the I<concertpitch> setting, which is 440Hz by
-default. Use B<set_concertpitch> to adjust this, for example to base the
+Conversions are based on the I<concertfreq> setting, which is 440Hz by
+default. Use B<set_concertfreq> to adjust this, for example to base the
 conversion around the frequency of MIDI pitch 60:
 
-  $scala->set_concertpitch(261.63);
+  $scala->set_concertfreq(261.63);
 
 Some scala files note what this value should be in the comments or
 description, or it may vary based on the specific software or
@@ -451,7 +515,7 @@ I<binmode> is passed to those methods.
 
 =item *
 
-I<concertpitch> - sets the reference value (in Hertz) for conversions
+I<concertfreq> - sets the reference value (in Hertz) for conversions
 using the B<interval2freq> method. By default this is 440Hz.
 
 =item *
@@ -474,6 +538,12 @@ data. Sanity check high water mark in the event bad input is passed.
 
 Given a list of notes, returns a list of corresponding ratios. Used
 internally by the B<get_ratios> and B<interval2freq> methods.
+
+=item B<pitch2freq> I<MIDI_pitch_number>
+
+Converts the given MIDI pitch number to a frequency using the MIDI
+conversion algorithm (equal temperament), as influenced by the
+I<concertfreq> setting.
 
 =item B<read_scala> I<filename>
 
@@ -500,10 +570,15 @@ B<write_scala> methods (unless a custom I<binmode> argument is passed to
 those calls). Returns the Music::Scala object, so can be chained with
 other calls.
 
-=item B<set_concertpitch> I<frequency>
+=item B<set_concertfreq> I<frequency>
 
-Sets the concert pitch to the specified positive value. Will throw an
+Sets the concert frequency to the specified value (in Hz). Will throw an
 exception if the input does not look like a positive number.
+
+=item B<set_concertpitch> I<pitch_number>
+
+Sets the MIDI pitch number tied to the I<concertfreq>. Changing this
+will affect the B<freq2pitch> and B<pitch2freq> methods.
 
 =item B<set_description> I<description>
 
