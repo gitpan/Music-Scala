@@ -20,9 +20,10 @@ no_index:
 requires:
   Carp: 0
   Scalar::Util: 0
+  Test::Exception: 0
   Test::More: 0
 resources:
   homepage: http://github.com/thrig/Music-Scala
   license: http://dev.perl.org/licenses/
   repository: http://github.com/thrig/Music-Scala
-version: 0.50
+version: 0.51
