@@ -2,6 +2,9 @@
 #
 # Scala scale (musical tuning and temperament) support for Perl, based
 # on specification at: http://www.huygens-fokker.org/scala/
+#
+# Ratio to cent and cent to ratio equations lifted from "Musimathics,
+# volume 1", pp. 45-46.
 
 package Music::Scala;
 
@@ -12,7 +15,7 @@ use warnings;
 use Carp qw/croak/;
 use Scalar::Util qw/looks_like_number reftype/;
 
-our $VERSION = '0.60';
+our $VERSION = '0.70';
 
 # To avoid file reader from wasting too much time on bum input (longest
 # scala file 'fortune.scl' in archive as of 2013-02-19 has 617 lines).
@@ -37,6 +40,7 @@ sub freq2pitch {
     if !looks_like_number $freq
     or $freq < 0;
 
+  # no precision, as assume pitch numbers are integers
   return sprintf "%.0f",
     $self->{_concertpitch} +
     12 * ( log( $freq / $self->{_concertfreq} ) / log(2) );
@@ -45,6 +49,15 @@ sub freq2pitch {
 sub get_binmode {
   my ($self) = @_;
   return $self->{_binmode};
+}
+
+sub get_cents {
+  my ($self) = @_;
+  croak 'no scala loaded' if !exists $self->{_notes};
+  if ( !defined $self->{_ratios} ) {
+    $self->{_cents} = [ $self->notes2cents( $self->{_notes} ) ];
+  }
+  return @{ $self->{_cents} };
 }
 
 sub get_concertfreq {
@@ -146,6 +159,7 @@ sub new {
   $self->{_MAX_LINES} =
     exists $param{MAX_LINES} ? $param{MAX_LINES} : $MAX_LINES;
 
+  $self->{_cents}  = undef;
   $self->{_ratios} = undef;
 
   bless $self, $class;
@@ -159,17 +173,30 @@ sub new {
   return $self;
 }
 
+sub notes2cents {
+  my $self = shift;
+
+  my @cents;
+  for my $n ( ref $_[0] eq 'ARRAY' ? @{ $_[0] } : @_ ) {
+    if ( $n =~ m{(\d+)/([1-9][0-9]*)} ) {
+      push @cents,
+        1200 * ( ( log( $1 / $2 ) / 2.30258509299405 ) / 0.301029995663981 );
+    } else {
+      push @cents, $n;
+    }
+  }
+
+  return @cents > 1 ? @cents : $cents[0];
+}
+
 sub notes2ratios {
   my $self = shift;
 
   my @ratios;
   for my $n ( ref $_[0] eq 'ARRAY' ? @{ $_[0] } : @_ ) {
-    if ( $n =~ m{(\d+)/(\d+)} ) {
+    if ( $n =~ m{(\d+)/([1-9][0-9]*)} ) {
       push @ratios, $1 / $2;    # ratio, as marked with /
     } else {
-      # Inverse cent (cent to ratio) equation. Lifted from
-      # "Musimathics, volume 1", p.46. Magic number is
-      # (1200/log10(2))
       push @ratios, 10**( $n / 3986.31371386484 );
     }
   }
@@ -287,7 +314,13 @@ sub read_scala {
       . scalar(@notes)
       . " notes";
   }
+
+  # edge case: remove any 1/1 (zero cents) at head of the list, as this
+  # implementation treats that as implicit
+  shift @notes if sprintf "%.0f", $self->notes2cents( $notes[0] ) == 0;
+
   $self->{_notes}  = \@notes;
+  $self->{_cents}  = undef;
   $self->{_ratios} = undef;
 
   return $self;
@@ -342,7 +375,13 @@ sub set_notes {
       croak 'notes must be integer ratios or real numbers';
     }
   }
+
+  # edge case: remove any 1/1 (zero cents) at head of the list, as this
+  # implementation treats that as implicit
+  shift @notes if sprintf "%.0f", $self->notes2cents( $notes[0] ) == 0;
+
   $self->{_notes}  = \@notes;
+  $self->{_cents}  = undef;
   $self->{_ratios} = undef;
   return $self;
 }
@@ -372,6 +411,8 @@ sub write_scala {
     binmode $fh, $self->{_binmode} or croak 'binmode failed: ' . $!;
   }
 
+  say $fh ( exists $param{file} ) ? "! $param{file}" : '!';
+  say $fh '!';
   say $fh ( exists $self->{_description} and defined $self->{_description} )
     ? $self->{_description}
     : '';
@@ -399,6 +440,7 @@ Music::Scala - Scala scale support for Perl
   $scala->read_scala('groenewald_bach.scl');
   $scala->get_description; # "Jurgen Gronewald, si..."
   $scala->get_notes;       # (256/243, 189.25008, ...)
+  $scala->get_cents;
   $scala->get_ratios;
 
   $scala->set_concertfreq(422.5);
@@ -415,7 +457,8 @@ Music::Scala - Scala scale support for Perl
   $scala->pitch2freq(69);
   $scala->freq2pitch(440);
 
-And more...
+And more; see also the C<eg/> and C<t/> directories of the distribution
+of this module for example code.
 
 =head1 DESCRIPTION
 
@@ -431,9 +474,10 @@ to bad input. B<new> would be a good one to start with.
 
 =over 4
 
-=item B<cents2ratio> I<cents>
+=item B<cents2ratio> I<cents>, [ I<precision> ]
 
-Converts a value in cents (e.g. 1200) to a ratio (e.g. 2).
+Converts a value in cents (e.g. 1200) to a ratio (e.g. 2). An optional
+precision for C<sprintf> can be supplied; the default precision is 2.
 
 =item B<freq2pitch> I<frequency>
 
@@ -445,6 +489,12 @@ comparison with results from B<interval2freq>.
 =item B<get_binmode>
 
 Returns the current C<binmode> layer setting, C<undef> by default.
+
+=item B<get_cents>
+
+Returns, as a list, the "notes" of the scala, except converted to cents
+(notes may either be ratios or values in cents). Throws an exception if
+the notes have not been set by some previous method.
 
 =item B<get_concertfreq>
 
@@ -479,9 +529,9 @@ second of a 12-tone scale).
 
 =item B<get_ratios>
 
-Returns, as a list, the "notes" of the scala, except all converted to
-ratios (notes may either be interval numbers or values in cents). Throws
-an exception if the notes have not been set by some previous method.
+Returns, as a list, the "notes" of the scala, except converted to ratios
+(notes may either be ratios or values in cents). Throws an exception if
+the notes have not been set by some previous method.
 
 =item B<interval2freq> I<intervals ...>
 
@@ -565,6 +615,11 @@ data. Sanity check high water mark in the event bad input is passed.
 
 =back
 
+=item B<notes2cents> I<notes ...>
+
+Given a list of notes, returns a list of corresponding cents. Used
+internally by the B<get_cents> method.
+
 =item B<notes2ratios> I<notes ...>
 
 Given a list of notes, returns a list of corresponding ratios. Used
@@ -576,9 +631,10 @@ Converts the given MIDI pitch number to a frequency using the MIDI
 conversion algorithm (equal temperament), as influenced by the
 I<concertfreq> setting.
 
-=item B<ratio2cents> I<ratio>
+=item B<ratio2cents> I<ratio>, [ I<precision> ]
 
-Converts a ratio (e.g. 2) to a value in cents (e.g. 1200).
+Converts a ratio (e.g. 2) to a value in cents (e.g. 1200). An optional
+precision for C<sprintf> can be supplied; the default precision is 2.
 
 =item B<read_scala> I<filename>
 
@@ -658,32 +714,8 @@ Returns the Music::Scala object, so can be chained with other calls.
 
 =head1 EXAMPLES
 
-Print names of any scala files whose note count is 12 (only about 29% of
-the C<scales.zip> as of 2013-02-20).
-
-  #!/usr/bin/env perl
-  use strict;
-  use warnings;
-  use feature qw/say/;
-  
-  use Music::Scala ();
-  my $s = Music::Scala->new;
-  
-  for my $file ( glob('*.scl') ) {
-    eval { say $file if $s->read_scala($file)->get_notes == 12 };
-    warn "could not parse '$file': $@" if $@;
-  }
-
-Another interesting question is which scales contain the octave (and
-whether that octave is also the ultimate element of the note list). This
-requires converting the "notes" into actual ratios, as otherwise an
-octave might be represented as C<2/1> or C<1200.0> or C<4/2> or so
-forth. Roughly 87% of the scales are bounded at the octave:
-
-  for my $file ( glob('*.scl') ) {
-    my @ratios = $s->read_scala($file)->get_ratios;
-    if ( $ratios[-1] == 2 ) { say $file }
-  }
+Check the C<eg/> and C<t/> directories of the distribution of this
+module for example code.
 
 =head1 SEE ALSO
 

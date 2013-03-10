@@ -93,7 +93,8 @@ my $output = '';
 open my $ofh, '>', \$output or die 'could not open in-memory fh ' . $!;
 isa_ok( $scala->write_scala( fh => $ofh ), 'Music::Scala' );
 close $ofh;
-is( $output, "test\r\n 2\r\n!\r\n 256/243\r\n 9/8\r\n", 'output to fh' );
+is( $output, "!\r\n!\r\ntest\r\n 2\r\n!\r\n 256/243\r\n 9/8\r\n",
+  'output to fh' );
 
 isa_ok( $scala->set_concertfreq(123.4), 'Music::Scala' );
 is( $scala->get_concertfreq, 123.4, 'custom concert frequency' );
@@ -121,7 +122,21 @@ is( $scala->get_binmode, undef, 'default binmode' );
 isa_ok( $scala->set_binmode(':crlf'), 'Music::Scala' );
 is( $scala->get_binmode, ':crlf', 'custom binmode' );
 
+# another edge case is scales that begin with 1/1, which is implicit in
+# this module, so must be dealt with if present
+$scala->read_scala('slen_pel16.scl');
+is (($scala->get_cents)[0], '150.000', 'check that 1/1 removed at head');
+
 $scala->set_notes( '2/1', '1200.0', '5/4' );
+
+$deeply->(
+  [ map { my $s = sprintf "%.2f", $_; $s }
+      $scala->notes2cents( $scala->get_notes )
+  ],
+  [ map { my $s = sprintf "%.2f", $_; $s } 1200, 1200, 386.31 ],
+  'notes2cents'
+);
+
 $deeply->(
   [ map { my $s = sprintf "%.2f", $_; $s }
       $scala->notes2ratios( $scala->get_notes )
@@ -129,8 +144,12 @@ $deeply->(
   [ map { my $s = sprintf "%.2f", $_; $s } 2, 2, 5 / 4 ],
   'notes2ratios'
 );
-# get_ratios uses notes2ratios internally, though ratios only calculated
-# and saved in object when necessary
+
+$deeply->(
+  [ map { my $s = sprintf "%.2f", $_; $s } $scala->get_cents ],
+  [ map { my $s = sprintf "%.2f", $_; $s } 1200, 1200, 386.31 ],
+  'notes2ratios'
+);
 $deeply->(
   [ map { my $s = sprintf "%.2f", $_; $s } $scala->get_ratios ],
   [ map { my $s = sprintf "%.2f", $_; $s } 2, 2, 5 / 4 ],
@@ -148,4 +167,4 @@ is(
   'cents2ratio octave'
 );
 
-plan tests => 35;
+plan tests => 38;
