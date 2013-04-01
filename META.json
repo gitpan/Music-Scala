@@ -33,6 +33,7 @@
       "runtime" : {
          "requires" : {
             "Carp" : "0",
+            "File::Basename" : "0",
             "Scalar::Util" : "0",
             "Test::Exception" : "0",
             "Test::More" : "0"
@@ -49,5 +50,5 @@
          "url" : "http://github.com/thrig/Music-Scala"
       }
    },
-   "version" : "0.70"
+   "version" : "0.81"
 }

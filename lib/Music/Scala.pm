@@ -5,6 +5,9 @@
 #
 # Ratio to cent and cent to ratio equations lifted from "Musimathics,
 # volume 1", pp. 45-46.
+#
+# TODO test scala file with negative cents, make sure various things
+# behave wrt that.
 
 package Music::Scala;
 
@@ -13,9 +16,10 @@ use strict;
 use warnings;
 
 use Carp qw/croak/;
+use File::Basename qw/basename/;
 use Scalar::Util qw/looks_like_number reftype/;
 
-our $VERSION = '0.70';
+our $VERSION = '0.81';
 
 # To avoid file reader from wasting too much time on bum input (longest
 # scala file 'fortune.scl' in archive as of 2013-02-19 has 617 lines).
@@ -53,7 +57,7 @@ sub get_binmode {
 
 sub get_cents {
   my ($self) = @_;
-  croak 'no scala loaded' if !exists $self->{_notes};
+  croak 'no scala loaded' unless @{ $self->{_notes} };
   if ( !defined $self->{_ratios} ) {
     $self->{_cents} = [ $self->notes2cents( $self->{_notes} ) ];
   }
@@ -80,22 +84,28 @@ sub get_description {
 # returns as array in scalar context.
 sub get_notes {
   my ($self) = @_;
-  croak 'no scala loaded' if !exists $self->{_notes};
+  croak 'no scala loaded' unless @{ $self->{_notes} };
   return @{ $self->{_notes} };
 }
 
 sub get_ratios {
   my ($self) = @_;
-  croak 'no scala loaded' if !exists $self->{_notes};
+  croak 'no scala loaded' unless @{ $self->{_notes} };
   if ( !defined $self->{_ratios} ) {
     $self->{_ratios} = [ $self->notes2ratios( $self->{_notes} ) ];
   }
   return @{ $self->{_ratios} };
 }
 
+sub get_ref {
+  my ($self) = @_;
+  croak 'no scala loaded' unless @{ $self->{_notes} };
+  return $self->{_notes};
+}
+
 sub interval2freq {
   my $self = shift;
-  croak 'no scala loaded' if !exists $self->{_notes};
+  croak 'no scala loaded' unless @{ $self->{_notes} };
 
   if ( !defined $self->{_ratios} ) {
     $self->{_ratios} = [ $self->notes2ratios( $self->{_notes} ) ];
@@ -159,7 +169,9 @@ sub new {
   $self->{_MAX_LINES} =
     exists $param{MAX_LINES} ? $param{MAX_LINES} : $MAX_LINES;
 
+  # RESET_DUP_CODE
   $self->{_cents}  = undef;
+  $self->{_notes}  = [];
   $self->{_ratios} = undef;
 
   bless $self, $class;
@@ -319,16 +331,54 @@ sub read_scala {
   # implementation treats that as implicit
   shift @notes if sprintf "%.0f", $self->notes2cents( $notes[0] ) == 0;
 
-  $self->{_notes}  = \@notes;
+  @{ $self->{_notes} } = @notes;
+  # RESET_DUP_CODE
   $self->{_cents}  = undef;
   $self->{_ratios} = undef;
 
   return $self;
 }
 
+sub reset {
+  my ( $self, $everything ) = @_;
+  # RESET_DUP_CODE
+  $self->{_cents}  = undef;
+  $self->{_ratios} = undef;
+  @{ $self->{_notes} } = () if $everything;
+  return $self;
+}
+
 sub set_binmode {
   my ( $self, $binmode ) = @_;
   $self->{_binmode} = $binmode;
+  return $self;
+}
+
+# Given list of frequencies, assume first is root frequency, then
+# convert the remainder of the frequences to cents against that first
+# frequency.
+sub set_by_frequency {
+  my $self = shift;
+  my $freqs = ref $_[0] eq 'ARRAY' ? $_[0] : \@_;
+  croak 'need both root and other frequencies' if @$freqs < 2;
+  croak 'root frequency must not be zero' if $freqs->[0] == 0;
+
+  my @notes;
+  for my $i ( 1 .. $#{$freqs} ) {
+    push @notes,
+      1200 * ( ( log( $freqs->[$i] / $freqs->[0] ) / 2.30258509299405 ) /
+        0.301029995663981 );
+  }
+
+  # edge case: remove any 1/1 (zero cents) at head of the list, as this
+  # implementation treats that as implicit
+  shift @notes if sprintf "%.0f", $self->notes2cents( $notes[0] ) == 0;
+
+  @{ $self->{_notes} } = @notes;
+  # RESET_DUP_CODE
+  $self->{_cents}  = undef;
+  $self->{_ratios} = undef;
+
   return $self;
 }
 
@@ -380,7 +430,8 @@ sub set_notes {
   # implementation treats that as implicit
   shift @notes if sprintf "%.0f", $self->notes2cents( $notes[0] ) == 0;
 
-  $self->{_notes}  = \@notes;
+  @{ $self->{_notes} } = @notes;
+  # RESET_DUP_CODE
   $self->{_cents}  = undef;
   $self->{_ratios} = undef;
   return $self;
@@ -388,7 +439,7 @@ sub set_notes {
 
 sub write_scala {
   my $self = shift;
-  croak 'no scala loaded' if !exists $self->{_notes};
+  croak 'no scala loaded' unless @{ $self->{_notes} };
 
   my %param;
   if ( @_ == 1 ) {
@@ -411,13 +462,20 @@ sub write_scala {
     binmode $fh, $self->{_binmode} or croak 'binmode failed: ' . $!;
   }
 
-  say $fh ( exists $param{file} ) ? "! $param{file}" : '!';
+  my $filename = basename( $param{file} )
+    if exists $param{file};
+  my $note_count = @{ $self->{_notes} } || 0;
+
+  say $fh defined $filename
+    ? "! $filename"
+    : '!';
   say $fh '!';
   say $fh ( exists $self->{_description} and defined $self->{_description} )
     ? $self->{_description}
     : '';
-  say $fh ' ', scalar @{ $self->{_notes} };
+  say $fh ' ', $note_count;
   say $fh '!';    # conventional comment between note count and notes
+
   for my $note ( @{ $self->{_notes} } ) {
     say $fh ' ', $note;
   }
@@ -658,8 +716,18 @@ Returns the Music::Scala object, so can be chained with other calls.
 
 Sets the default C<binmode> layer used in B<read_scala> and
 B<write_scala> methods (unless a custom I<binmode> argument is passed to
-those calls). Returns the Music::Scala object, so can be chained with
-other calls.
+those calls).
+
+Returns the Music::Scala object, so can be chained with other calls.
+
+=item B<set_by_frequency> I<root_frequency>, I<frequencies...>
+
+Given a root frequency as the first argument, performs the equivalent of
+B<set_notes> except creating the intervals on the fly based on the
+I<root_frequency> supplied. Handy if you have a list of frequencies from
+somewhere, and need that converted to cents or ratios.
+
+Returns the Music::Scala object, so can be chained with other calls.
 
 =item B<set_concertfreq> I<frequency>
 
@@ -673,16 +741,18 @@ will affect the B<freq2pitch> and B<pitch2freq> methods.
 
 =item B<set_description> I<description>
 
-Sets the description. Should be a string. Returns the Music::Scala
-object, so can be chained with other calls.
+Sets the description. Should be a string.
+
+Returns the Music::Scala object, so can be chained with other calls.
 
 =item B<set_notes> I<array_or_array_ref>
 
 Sets the notes. Can be either an array, or an array reference, ideally
 containing values in ratios or cents as per the Scala scale file
 specification, and the method will throw an exception if these ideals
-are not met. Returns the Music::Scala object, so can be chained with
-other calls.
+are not met.
+
+Returns the Music::Scala object, so can be chained with other calls.
 
 NOTE cents with no value past the decimal must be quoted in code, as
 otherwise Perl converts the value to C<1200> which the code then turns
@@ -717,6 +787,22 @@ Returns the Music::Scala object, so can be chained with other calls.
 Check the C<eg/> and C<t/> directories of the distribution of this
 module for example code.
 
+=head1 BUGS
+
+=head2 Reporting Bugs
+
+If the bug is in the latest version, send a report to the author.
+Patches that fix problems or add new features are welcome.
+
+L<http://github.com/thrig/Music-Scala>
+
+=head2 Known Issues
+
+Negative cents are likely not handled well, or at all. The
+specification frowns on negative ratios, but does allow for negative
+cents, so converting such negative cents to ratios might yield
+unexpected or wrong results.
+
 =head1 SEE ALSO
 
 L<http://www.huygens-fokker.org/scala/> by Manuel Op de Coul, and the
@@ -726,9 +812,6 @@ Scales, tunings, and temperament would be good music theory topics to
 read up on, e.g. chapters in "Musicmathics, volume 1" by Gareth Loy
 (among many other more in-depth treatments stemming from the more than
 one centuries of development behind these topics).
-
-L<http://github.com/thrig/Music-Scala> for the perhaps more current
-version of this code, or to report bugs, etc.
 
 =head1 AUTHOR
 
