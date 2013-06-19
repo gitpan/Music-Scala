@@ -23,8 +23,9 @@ requires:
   Scalar::Util: 0
   Test::Exception: 0
   Test::More: 0
+  perl: 5.01
 resources:
   homepage: http://github.com/thrig/Music-Scala
   license: http://dev.perl.org/licenses/
   repository: http://github.com/thrig/Music-Scala
-version: 0.82
+version: 0.83
